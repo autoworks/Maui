@@ -39,6 +39,14 @@ public interface ICameraView : IView
 	float ZoomFactor { get; internal set; }
 
 	/// <summary>
+	/// bla
+	/// </summary>
+	/// <remarks>
+	/// bla
+	/// </remarks>
+	float ManualExposure { get; internal set; }
+
+	/// <summary>
 	/// Gets whether the implementation is available.
 	/// </summary>
 	bool IsAvailable { get; internal set; }

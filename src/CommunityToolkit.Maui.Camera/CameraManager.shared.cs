@@ -93,6 +93,8 @@ partial class CameraManager(
 	/// <param name="zoomLevel">The new zoom level to set.</param>
 	public partial void UpdateZoom(float zoomLevel);
 
+	public partial ValueTask UpdateManualExposure(float exposureValue);
+
 	/// <summary>
 	/// Updates the capture resolution of the camera.
 	/// </summary>

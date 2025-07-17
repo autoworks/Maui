@@ -2,6 +2,7 @@
 using AVFoundation;
 using CommunityToolkit.Maui.Extensions;
 using CoreMedia;
+using CoreVideo;
 using Foundation;
 using UIKit;
 
@@ -74,6 +75,32 @@ partial class CameraManager
 		}
 
 		captureDevice.VideoZoomFactor = zoomLevel;
+		captureDevice.UnlockForConfiguration();
+	}
+
+	public async partial ValueTask UpdateManualExposure(float exposureValue)
+	{
+		if (!IsInitialized || captureDevice is null)
+		{
+			return;
+		}
+
+		if (!captureDevice.IsExposureModeSupported(AVCaptureExposureMode.AutoExpose))
+		{
+			return;
+		}
+
+		captureDevice.LockForConfiguration(out NSError? error);
+		if (error is not null)
+		{
+			Trace.WriteLine(error);
+			return;
+		}
+
+		captureDevice.ExposureMode = AVCaptureExposureMode.AutoExpose;
+
+		await captureDevice.SetExposureTargetBiasAsync(exposureValue);
+
 		captureDevice.UnlockForConfiguration();
 	}
 

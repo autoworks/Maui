@@ -56,6 +56,12 @@ public partial class CameraView : View, ICameraView, IDisposable
 		BindableProperty.Create(nameof(ZoomFactor), typeof(float), typeof(CameraView), CameraViewDefaults.ZoomFactor, coerceValue: CoerceZoom, defaultBindingMode: BindingMode.TwoWay);
 
 	/// <summary>
+	/// Backing <see cref="BindableProperty"/> for the <see cref="ManualExposure"/> property.
+	/// </summary>
+	public static readonly BindableProperty ManualExposureProperty =
+		BindableProperty.Create(nameof(ManualExposure), typeof(float), typeof(CameraView), CameraViewDefaults.ManualExposure, defaultBindingMode: BindingMode.TwoWay);
+
+	/// <summary>
 	/// Backing <see cref="BindableProperty"/> for the <see cref="ImageCaptureResolution"/> property.
 	/// </summary>
 	public static readonly BindableProperty ImageCaptureResolutionProperty = BindableProperty.Create(nameof(ImageCaptureResolution),
@@ -158,6 +164,13 @@ public partial class CameraView : View, ICameraView, IDisposable
 	{
 		get => (float)GetValue(ZoomFactorProperty);
 		set => SetValue(ZoomFactorProperty, value);
+	}
+
+	/// <inheritdoc cref="ICameraView.ManualExposure"/>
+	public float ManualExposure
+	{
+		get => (float)GetValue(ManualExposureProperty);
+		set => SetValue(ManualExposureProperty, value);
 	}
 
 	/// <inheritdoc cref="ICameraView.ImageCaptureResolution"/>

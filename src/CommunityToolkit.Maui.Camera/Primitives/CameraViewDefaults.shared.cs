@@ -35,6 +35,11 @@ public static class CameraViewDefaults
 	public const float ZoomFactor = 1.0f;
 
 	/// <summary>
+	/// Default value for <see cref="ICameraView.ManualExposure"/>
+	/// </summary>
+	public const float ManualExposure = 0.0f;
+
+	/// <summary>
 	/// Default value for <see cref="ICameraView.ImageCaptureResolution"/>
 	/// </summary>
 	public static Size ImageCaptureResolution { get; } = Size.Zero;
