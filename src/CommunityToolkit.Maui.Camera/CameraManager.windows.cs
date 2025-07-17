@@ -73,6 +73,12 @@ partial class CameraManager
 		mediaCapture.VideoDeviceController.ZoomControl.Value = zoomLevel;
 	}
 
+	public async partial ValueTask UpdateManualExposure(float exposureValue)
+	{
+		// do nothing
+		await Task.Delay(1);
+	}
+
 	public async partial ValueTask UpdateCaptureResolution(Size resolution, CancellationToken token)
 	{
 		await PlatformUpdateResolution(resolution, token);
