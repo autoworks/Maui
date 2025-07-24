@@ -29,7 +29,7 @@ partial class CameraManager
 	{
 		captureSession = new AVCaptureSession
 		{
-			SessionPreset = AVCaptureSession.PresetPhoto
+			SessionPreset = AVCaptureSession.Preset3840x2160
 		};
 
 		previewView = new PreviewView
@@ -139,7 +139,8 @@ partial class CameraManager
 
 		if (filteredFormatList.Count is not 0)
 		{
-			captureDevice.ActiveFormat = filteredFormatList.First();
+			// breaks the camera preview
+			//captureDevice.ActiveFormat = filteredFormatList.First();
 		}
 
 		captureDevice.UnlockForConfiguration();
@@ -346,7 +347,7 @@ partial class CameraManager
 	{
 		public PreviewView()
 		{
-			PreviewLayer.VideoGravity = AVLayerVideoGravity.ResizeAspectFill;
+			PreviewLayer.VideoGravity = AVLayerVideoGravity.ResizeAspect;
 		}
 
 		[Export("layerClass")]
