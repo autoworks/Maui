@@ -40,6 +40,11 @@ public static class CameraViewDefaults
 	public const float ManualExposure = 0.0f;
 
 	/// <summary>
+	/// Default value for <see cref="ICameraView.TouchExposAndFocus"/>
+	/// </summary>
+	public const bool TouchExposAndFocus = false;
+
+	/// <summary>
 	/// Default value for <see cref="ICameraView.ImageCaptureResolution"/>
 	/// </summary>
 	public static Size ImageCaptureResolution { get; } = Size.Zero;
