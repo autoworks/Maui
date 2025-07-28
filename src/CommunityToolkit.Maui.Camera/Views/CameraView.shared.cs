@@ -62,6 +62,12 @@ public partial class CameraView : View, ICameraView, IDisposable
 		BindableProperty.Create(nameof(ManualExposure), typeof(float), typeof(CameraView), CameraViewDefaults.ManualExposure, defaultBindingMode: BindingMode.TwoWay);
 
 	/// <summary>
+	/// Backing <see cref="BindableProperty"/> for the <see cref="ManualExposure"/> property.
+	/// </summary>
+	public static readonly BindableProperty TouchExposAndFocusProperty =
+		BindableProperty.Create(nameof(TouchExposAndFocus), typeof(bool), typeof(CameraView), CameraViewDefaults.TouchExposAndFocus, defaultBindingMode: BindingMode.TwoWay);
+
+	/// <summary>
 	/// Backing <see cref="BindableProperty"/> for the <see cref="ImageCaptureResolution"/> property.
 	/// </summary>
 	public static readonly BindableProperty ImageCaptureResolutionProperty = BindableProperty.Create(nameof(ImageCaptureResolution),
@@ -171,6 +177,13 @@ public partial class CameraView : View, ICameraView, IDisposable
 	{
 		get => (float)GetValue(ManualExposureProperty);
 		set => SetValue(ManualExposureProperty, value);
+	}
+
+	/// <inheritdoc cref="ICameraView.TouchExposAndFocus"/>
+	public bool TouchExposAndFocus
+	{
+		get => (bool)GetValue(TouchExposAndFocusProperty);
+		set => SetValue(TouchExposAndFocusProperty, value);
 	}
 
 	/// <inheritdoc cref="ICameraView.ImageCaptureResolution"/>

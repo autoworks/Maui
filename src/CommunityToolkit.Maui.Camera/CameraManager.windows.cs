@@ -79,6 +79,12 @@ partial class CameraManager
 		await Task.Delay(1);
 	}
 
+	public partial void UpdateTouchExposAndFocus(bool value)
+	{
+		// do nothing
+		var temp = value;
+	}
+
 	public async partial ValueTask UpdateCaptureResolution(Size resolution, CancellationToken token)
 	{
 		await PlatformUpdateResolution(resolution, token);

@@ -5,6 +5,8 @@ using CoreMedia;
 using CoreVideo;
 using Foundation;
 using UIKit;
+using CoreGraphics;
+using CoreAnimation;
 
 namespace CommunityToolkit.Maui.Core;
 
@@ -104,6 +106,19 @@ partial class CameraManager
 		captureDevice.UnlockForConfiguration();
 	}
 
+	public partial void UpdateTouchExposAndFocus(bool value)
+	{
+		if (!IsInitialized || captureDevice is null)
+		{
+			return;
+		}
+
+		if (previewView is not null)
+		{
+			previewView.SetTouchExposAndFocus(value);
+		}
+	}
+
 	public async partial ValueTask UpdateCaptureResolution(Size resolution, CancellationToken token)
 	{
 		if (captureDevice is null)
@@ -185,6 +200,8 @@ partial class CameraManager
 		captureDevice = cameraView.SelectedCamera.CaptureDevice ?? throw new CameraException($"No Camera found");
 		captureInput = new AVCaptureDeviceInput(captureDevice, out _);
 		captureSession.AddInput(captureInput);
+
+		previewView!.SetCaptureDevice(captureDevice);
 
 		if (photoOutput is null)
 		{
@@ -345,6 +362,9 @@ partial class CameraManager
 
 	sealed class PreviewView : UIView
 	{
+		AVCaptureDevice? captureDevice;
+		bool touchExposAndFocus;
+
 		public PreviewView()
 		{
 			PreviewLayer.VideoGravity = AVLayerVideoGravity.ResizeAspect;
@@ -376,6 +396,96 @@ partial class CameraManager
 			{
 				PreviewLayer.Connection.VideoOrientation = videoOrientation;
 			}
+		}
+
+		public void SetCaptureDevice(AVCaptureDevice? captureDevice)
+		{
+			this.captureDevice = captureDevice;
+		}
+
+		public void SetTouchExposAndFocus(bool value)
+		{
+			touchExposAndFocus = value;
+		}
+
+		public override void TouchesBegan(NSSet touches, UIEvent? evt)
+		{
+			base.TouchesBegan(touches, evt);
+
+			if (captureDevice is null)
+			{
+				return;
+			}
+
+			if (touches.AnyObject is not UITouch touch)
+			{
+				return;
+			}
+
+			var point = touch.LocationInView(this);
+
+			var screen = Layer.Bounds;
+
+			var focusPoint = new CGPoint(point.X / screen.Width, point.Y / screen.Height);
+
+			var focusMode = touchExposAndFocus ? AVCaptureFocusMode.ContinuousAutoFocus : AVCaptureFocusMode.AutoFocus;
+			var exposureMode = touchExposAndFocus ? AVCaptureExposureMode.ContinuousAutoExposure : AVCaptureExposureMode.AutoExpose;
+
+			// for some readon, the focus and exposure needs to be set twice
+			for (int i = 0; i < 2; i++)
+			{
+				SetFocusAndExposure(focusMode, exposureMode, focusPoint);
+			}
+
+			DrawFocusPoint(point);
+		}
+
+		void SetFocusAndExposure(AVCaptureFocusMode focusMode, AVCaptureExposureMode exposureMode, CGPoint focusPoint)
+		{
+			if (captureDevice is null)
+			{
+				return;
+			}
+
+			NSError error;
+			if (!captureDevice.LockForConfiguration(out error))
+			{
+				return;
+			}
+
+			if (captureDevice.FocusPointOfInterestSupported)
+			{
+				captureDevice.FocusMode = focusMode;
+				captureDevice.FocusPointOfInterest = focusPoint;
+			}
+
+			if (captureDevice.ExposurePointOfInterestSupported)
+			{
+				captureDevice.ExposureMode = exposureMode;
+				captureDevice.ExposurePointOfInterest = focusPoint;
+			}
+
+			captureDevice.UnlockForConfiguration();
+		}
+
+		void DrawFocusPoint(CGPoint focusPoint)
+		{
+			var focusLayer = new CALayer()
+			{
+				Frame = new CGRect(focusPoint.X - 20, focusPoint.Y - 20, 40, 40),
+				BorderColor = UIColor.Red.CGColor,
+				BorderWidth = 2,
+				CornerRadius = 20,
+				BackgroundColor = UIColor.Clear.CGColor
+			};
+
+			Layer.AddSublayer(focusLayer);
+
+			InvokeOnMainThread(async () =>
+			{
+				await Task.Delay(500);
+				focusLayer.RemoveFromSuperLayer();
+			});
 		}
 	}
 }
