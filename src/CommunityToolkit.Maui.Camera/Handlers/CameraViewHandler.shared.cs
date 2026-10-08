@@ -18,6 +18,8 @@ public partial class CameraViewHandler : ViewHandler<ICameraView, NativePlatform
 		[nameof(ICameraView.IsTorchOn)] = MapIsTorchOn,
 		[nameof(ICameraView.IsAvailable)] = MapIsAvailable,
 		[nameof(ICameraView.ZoomFactor)] = MapZoomFactor,
+		[nameof(ICameraView.ManualExposure)] = MapManualExposure,
+		[nameof(ICameraView.TouchExposAndFocus)] = MapTouchExposAndFocus,
 		[nameof(ICameraView.ImageCaptureResolution)] = MapImageCaptureResolution,
 		[nameof(ICameraView.SelectedCamera)] = MapSelectedCamera
 	};
@@ -78,6 +80,7 @@ public partial class CameraViewHandler : ViewHandler<ICameraView, NativePlatform
 			MapCameraFlashMode(this, view);
 			MapIsTorchOn(this, view);
 			view.ZoomFactor = 1.0f;
+			view.ManualExposure = 0.0f;
 		}
 	}
 
@@ -156,5 +159,15 @@ public partial class CameraViewHandler : ViewHandler<ICameraView, NativePlatform
 	static void MapZoomFactor(CameraViewHandler handler, ICameraView view)
 	{
 		handler.CameraManager.UpdateZoom(view.ZoomFactor);
+	}
+
+	static async void MapManualExposure(CameraViewHandler handler, ICameraView view)
+	{
+		await handler.CameraManager.UpdateManualExposure(view.ManualExposure);
+	}
+
+	static void MapTouchExposAndFocus(CameraViewHandler handler, ICameraView view)
+	{
+		handler.CameraManager.UpdateTouchExposAndFocus(view.TouchExposAndFocus);
 	}
 }

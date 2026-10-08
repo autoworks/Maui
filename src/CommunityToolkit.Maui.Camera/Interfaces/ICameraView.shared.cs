@@ -39,6 +39,22 @@ public interface ICameraView : IView
 	float ZoomFactor { get; internal set; }
 
 	/// <summary>
+	/// bla
+	/// </summary>
+	/// <remarks>
+	/// bla
+	/// </remarks>
+	float ManualExposure { get; internal set; }
+
+	/// <summary>
+	/// bla
+	/// </summary>
+	/// <remarks>
+	/// bla
+	/// </remarks>
+	bool TouchExposAndFocus { get; internal set; }
+
+	/// <summary>
 	/// Gets a value indicating whether the camera feature is available on the current device.
 	/// </summary>
 	bool IsAvailable { get; internal set; }

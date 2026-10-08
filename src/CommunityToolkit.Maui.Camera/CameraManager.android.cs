@@ -163,6 +163,18 @@ partial class CameraManager
 		cameraControl?.SetZoomRatio(zoomLevel);
 	}
 
+	public async partial ValueTask UpdateManualExposure(float exposureValue)
+	{
+		// do nothing
+		await Task.Delay(1);
+	}
+
+	public partial void UpdateTouchExposAndFocus(bool value)
+	{
+		// do nothing
+		var temp = value;
+	}
+
 	public async partial ValueTask UpdateCaptureResolution(Size resolution, CancellationToken token)
 	{
 		if (resolutionFilter is not null)

@@ -14,6 +14,10 @@ sealed partial class CameraManager
 
 	public partial void UpdateZoom(float zoomLevel) => throw new NotSupportedException(notSupportedMessage);
 
+	public partial ValueTask UpdateManualExposure(float exposureValue) => throw new NotSupportedException(notSupportedMessage);
+
+	public partial void UpdateTouchExposAndFocus(bool value) => throw new NotSupportedException(notSupportedMessage);
+
 	public partial ValueTask UpdateCaptureResolution(Size resolution, CancellationToken token) => throw new NotSupportedException(notSupportedMessage);
 
 	private partial Task PlatformStartVideoRecording(Stream stream, CancellationToken token) => throw new NotSupportedException(notSupportedMessage);
