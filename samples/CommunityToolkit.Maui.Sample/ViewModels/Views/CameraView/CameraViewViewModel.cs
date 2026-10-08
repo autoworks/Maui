@@ -25,6 +25,9 @@ public partial class CameraViewViewModel : BaseViewModel
 	public partial CameraFlashMode FlashMode { get; set; }
 
 	[ObservableProperty]
+	public partial bool IsTorchOn { get; set; }
+
+	[ObservableProperty]
 	public partial CameraInfo? SelectedCamera { get; set; }
 
 	[ObservableProperty]
@@ -47,9 +50,6 @@ public partial class CameraViewViewModel : BaseViewModel
 
 	[ObservableProperty]
 	public partial string ResolutionText { get; set; } = string.Empty;
-
-	[RelayCommand]
-	async Task RefreshCameras(CancellationToken token) => await cameraProvider.RefreshAvailableCameras(token);
 
 	partial void OnFlashModeChanged(CameraFlashMode value)
 	{

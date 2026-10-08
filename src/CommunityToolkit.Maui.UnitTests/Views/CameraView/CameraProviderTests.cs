@@ -2,7 +2,7 @@ using CommunityToolkit.Maui.Core;
 using CommunityToolkit.Maui.UnitTests.Mocks;
 using Xunit;
 
-namespace CommunityToolkit.Maui.UnitTests;
+namespace CommunityToolkit.Maui.UnitTests.Views;
 
 /// <summary>
 /// Comprehensive unit tests for CameraProvider.AreCameraInfoListsEqual method
@@ -536,14 +536,14 @@ public class CameraProviderTests
 		var initialCameras = provider.AvailableCameras;
 
 		// Act - Refresh creates new cameras
-		await provider.RefreshAvailableCameras(CancellationToken.None);
+		await provider.RefreshAvailableCameras(TestContext.Current.CancellationToken);
 		var firstCamera = provider.AvailableCameras?[0];
 
 		var eventRaisedCount = 0;
 		provider.AvailableCamerasChanged += (s, c) => eventRaisedCount++;
 
 		// Refresh again (will create different camera due to new GUID)
-		await provider.RefreshAvailableCameras(CancellationToken.None);
+		await provider.RefreshAvailableCameras(TestContext.Current.CancellationToken);
 
 		// Assert - Event should be raised because GUIDs are different
 		Assert.Equal(1, eventRaisedCount);

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using CommunityToolkit.Maui.Core;
 using CommunityToolkit.Maui.Sample.ViewModels.Views;
 using CommunityToolkit.Maui.Storage;
@@ -10,7 +9,6 @@ public sealed partial class CameraViewPage : BasePage<CameraViewViewModel>
 	readonly IFileSaver fileSaver;
 	readonly string imagePath;
 
-	int pageCount;
 	Stream videoRecordingStream = Stream.Null;
 
 	public CameraViewPage(CameraViewViewModel viewModel, IFileSystem fileSystem, IFileSaver fileSaver) : base(viewModel)
@@ -21,27 +19,39 @@ public sealed partial class CameraViewPage : BasePage<CameraViewViewModel>
 		imagePath = Path.Combine(fileSystem.CacheDirectory, "camera-view-image.jpg");
 
 		Camera.MediaCaptured += OnMediaCaptured;
-
-		Loaded += (s, e) => { pageCount = Navigation.NavigationStack.Count; };
 	}
 
 	protected override async void OnAppearing()
 	{
 		base.OnAppearing();
 
-		var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-		await BindingContext.RefreshCamerasCommand.ExecuteAsync(cancellationTokenSource.Token);
+		var cameraPermissionsRequest = await Permissions.RequestAsync<Permissions.Camera>();
+		if (cameraPermissionsRequest is not PermissionStatus.Granted)
+		{
+			await Shell.Current.CurrentPage.DisplayAlertAsync("Camera permission is not granted.", "Please grant the permission to use this feature.", "OK");
+			return;
+		}
+
+		try
+		{
+			var microphonePermissionsRequest = await Permissions.RequestAsync<Permissions.Microphone>();
+			if (microphonePermissionsRequest is not PermissionStatus.Granted)
+			{
+				await Shell.Current.CurrentPage.DisplayAlertAsync("Microphone permission is not granted.", "Audio recording will not be available without the Microphone permission, and captured video will be silent.", "OK");
+			}
+		}
+		catch (FileNotFoundException) when (OperatingSystem.IsWindows()) // Unpackaged Windows Apps do not generate the required file AppxManifest.xml 
+		{
+			await Shell.Current.CurrentPage.DisplayAlertAsync("Unable to access AppxManifest.xml", "Publish using a Packaged .NET MAUI app on Windows to enable Microphone.", "OK");
+		}
 	}
 
-	// https://github.com/dotnet/maui/issues/16697
 	// https://github.com/dotnet/maui/issues/15833
 	protected override void OnNavigatedFrom(NavigatedFromEventArgs args)
 	{
 		base.OnNavigatedFrom(args);
 
-		Debug.WriteLine($"< < OnNavigatedFrom {pageCount} {Navigation.NavigationStack.Count}");
-
-		if (Navigation.NavigationStack.Count < pageCount)
+		if (!Shell.Current.Navigation.NavigationStack.Contains(this))
 		{
 			Cleanup();
 		}
@@ -60,44 +70,49 @@ public sealed partial class CameraViewPage : BasePage<CameraViewViewModel>
 	void Cleanup()
 	{
 		Camera.MediaCaptured -= OnMediaCaptured;
-		Camera.Handler?.DisconnectHandler();
-	}
-
-	void OnUnloaded(object? sender, EventArgs e)
-	{
-		//Cleanup();
 	}
 
 	void OnMediaCaptured(object? sender, MediaCapturedEventArgs e)
 	{
-		using var localFileStream = File.Create(imagePath);
-
-		e.Media.CopyTo(localFileStream);
-
-		Dispatcher.Dispatch(() =>
+		try
 		{
-			// workaround for https://github.com/dotnet/maui/issues/13858
-#if ANDROID
-            image.Source = ImageSource.FromStream(() => File.OpenRead(imagePath));
-#else
-			image.Source = ImageSource.FromFile(imagePath);
-#endif
+			using var capturedImageStream = new MemoryStream();
+			e.Media.CopyTo(capturedImageStream);
 
-			debugText.Text = $"Image saved to {imagePath}";
-		});
+			var imageBytes = capturedImageStream.ToArray();
+
+			using (var localFileStream = new FileStream(imagePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+			{
+				localFileStream.Write(imageBytes, 0, imageBytes.Length);
+				localFileStream.Flush(flushToDisk: true);
+			}
+
+			Dispatcher.Dispatch(() =>
+			{
+				image.Source = ImageSource.FromStream(() => new MemoryStream(imageBytes));
+				debugText.Text = $"Image saved to {imagePath}";
+			});
+		}
+		catch (Exception ex)
+		{
+			Dispatcher.Dispatch(() =>
+			{
+				debugText.Text = $"Failed to save image: {ex.Message}";
+			});
+		}
 	}
 
-	void ZoomIn(object? sender, EventArgs e)
+	void ZoomIn(object? sender, EventArgs? e)
 	{
 		Camera.ZoomFactor += 1.0f;
 	}
 
-	void ZoomOut(object? sender, EventArgs e)
+	void ZoomOut(object? sender, EventArgs? e)
 	{
 		Camera.ZoomFactor -= 1.0f;
 	}
 
-	async void SetNightMode(object? sender, EventArgs e)
+	async void SetNightMode(object? sender, EventArgs? e)
 	{
 #if ANDROID
 		await Camera.SetExtensionMode(AndroidX.Camera.Extensions.ExtensionMode.Night);
@@ -106,24 +121,31 @@ public sealed partial class CameraViewPage : BasePage<CameraViewViewModel>
 #endif
 	}
 
-	async void StartCameraRecording(object? sender, EventArgs e)
+	async void StartCameraRecording(object? sender, EventArgs? e)
 	{
 		await Camera.StartVideoRecording(CancellationToken.None);
 	}
 
-	async void StopCameraRecording(object? sender, EventArgs e)
+	async void StopCameraRecording(object? sender, EventArgs? e)
 	{
 		videoRecordingStream = await Camera.StopVideoRecording(CancellationToken.None);
 	}
 
-	async void SaveVideo(object? sender, EventArgs e)
+	async void SaveVideo(object? sender, EventArgs? e)
 	{
 		if (videoRecordingStream == Stream.Null)
 		{
-			await DisplayAlert("Unable to Save Video", "Stream is null", "OK");
+			await DisplayAlertAsync("Unable to Save Video", "Stream is null", "OK");
 		}
 		else
 		{
+			var status = await Permissions.RequestAsync<Permissions.StorageWrite>();
+			if (status is not PermissionStatus.Granted)
+			{
+				await Shell.Current.CurrentPage.DisplayAlertAsync("Storage permission is not granted.", "Please grant the permission to use this feature.", "OK");
+				return;
+			}
+
 			await fileSaver.SaveAsync("recording.mp4", videoRecordingStream);
 			await videoRecordingStream.DisposeAsync();
 			videoRecordingStream = Stream.Null;

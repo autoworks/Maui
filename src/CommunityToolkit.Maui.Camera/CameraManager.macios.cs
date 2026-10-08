@@ -1,7 +1,9 @@
 ﻿using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using AVFoundation;
 using CommunityToolkit.Maui.Extensions;
 using CoreMedia;
+using CoreMotion;
 using Foundation;
 using ObjCRuntime;
 using UIKit;
@@ -17,7 +19,7 @@ partial class CameraManager
 	readonly NSDictionary<NSString, NSObject> codecSettings = new([AVVideo.CodecKey], [new NSString("jpeg")]);
 	AVCaptureDeviceInput? audioInput;
 	AVCaptureDevice? captureDevice;
-	AVCaptureInput? captureInput;
+	AVCaptureDeviceInput? captureInput;
 
 	AVCaptureSession? captureSession;
 
@@ -27,18 +29,47 @@ partial class CameraManager
 	AVCapturePhotoOutput? photoOutput;
 	PreviewView? previewView;
 
-	AVCaptureDeviceInput? videoInput;
 	AVCaptureVideoOrientation videoOrientation;
 	AVCaptureMovieFileOutput? videoOutput;
+	AVCaptureDeviceRotationCoordinator? rotationCoordinator;
+	AVCaptureMovieFileOutputRecordingDelegate? videoRecordingDelegate;
 	string? videoRecordingFileName;
 	TaskCompletionSource? videoRecordingFinalizeTcs;
 	Stream? videoRecordingStream;
+	CMMotionManager? motionManager;
 
 	/// <inheritdoc />
 	public void Dispose()
 	{
-		Dispose(true);
-		GC.SuppressFinalize(this);
+		CleanupVideoRecordingResources();
+
+		captureSession?.StopRunning();
+		captureSession?.Dispose();
+		captureSession = null;
+
+		captureInput?.Dispose();
+		captureInput = null;
+
+		captureDevice = null;
+
+		orientationDidChangeObserver?.Dispose();
+		orientationDidChangeObserver = null;
+
+		photoOutput?.Dispose();
+		photoOutput = null;
+
+		previewView?.Dispose();
+		previewView = null;
+
+		videoRecordingStream?.Dispose();
+		videoRecordingStream = null;
+
+		rotationCoordinator?.Dispose();
+		rotationCoordinator = null;
+
+		motionManager?.StopAccelerometerUpdates();
+		motionManager?.Dispose();
+		motionManager = null;
 	}
 
 	public NativePlatformCameraPreviewView CreatePlatformView()
@@ -53,6 +84,12 @@ partial class CameraManager
 			Session = captureSession
 		};
 
+		// use CMMotionManager to get device orientation on iOS 16 or lower, since AVCaptureDeviceRotationCoordinator is unavailable
+		if (!UIDevice.CurrentDevice.CheckSystemVersion(17, 0))
+		{
+			motionManager ??= new();
+			motionManager.StartAccelerometerUpdates();
+		}
 		orientationDidChangeObserver = UIDevice.Notifications.ObserveOrientationDidChange((_, _) => UpdateVideoOrientation());
 		UpdateVideoOrientation();
 
@@ -64,9 +101,34 @@ partial class CameraManager
 		this.flashMode = flashMode.ToPlatform();
 	}
 
+	public partial void UpdateIsTorchOn(bool isTorchOn)
+	{
+		if (!isInitialized ||
+			captureDevice is null ||
+			!captureDevice.TorchAvailable)
+		{
+			return;
+		}
+
+		bool isCurrentlyOn = captureDevice.TorchActive;
+
+		if (isCurrentlyOn != isTorchOn)
+		{
+			captureDevice.LockForConfiguration(out NSError? error);
+			if (error is not null)
+			{
+				Trace.WriteLine(error);
+				return;
+			}
+
+			captureDevice.TorchMode = isTorchOn ? AVCaptureTorchMode.On : AVCaptureTorchMode.Off;
+			captureDevice.UnlockForConfiguration();
+		}
+	}
+
 	public partial void UpdateZoom(float zoomLevel)
 	{
-		if (!IsInitialized || captureDevice is null)
+		if (!isInitialized || captureDevice is null)
 		{
 			return;
 		}
@@ -89,7 +151,7 @@ partial class CameraManager
 
 	public async partial ValueTask UpdateManualExposure(float exposureValue)
 	{
-		if (!IsInitialized || captureDevice is null)
+		if (!isInitialized || captureDevice is null)
 		{
 			return;
 		}
@@ -115,7 +177,7 @@ partial class CameraManager
 
 	public partial void UpdateTouchExposAndFocus(bool value)
 	{
-		if (!IsInitialized || captureDevice is null)
+		if (!isInitialized || captureDevice is null)
 		{
 			return;
 		}
@@ -126,64 +188,97 @@ partial class CameraManager
 		}
 	}
 
-	public async partial ValueTask UpdateCaptureResolution(Size resolution, CancellationToken token)
+	public partial ValueTask UpdateCaptureResolution(Size resolution, CancellationToken token)
 	{
-		if (captureDevice is null)
+		if (cameraView.SelectedCamera is null || captureDevice is null)
 		{
-			return;
+			return ValueTask.CompletedTask;
 		}
 
 		captureDevice.LockForConfiguration(out NSError? error);
 		if (error is not null)
 		{
 			Trace.WriteLine(error);
-			return;
+			return ValueTask.CompletedTask;
 		}
 
-		if (cameraView.SelectedCamera is null)
-		{
-			await cameraProvider.RefreshAvailableCameras(token);
-			cameraView.SelectedCamera = cameraProvider.AvailableCameras?.FirstOrDefault() ?? throw new CameraException("No camera available on device");
-		}
+		var formatsMatchingResolution = cameraView.SelectedCamera.SupportedFormats
+			.Where(format => MatchesResolution(format, resolution))
+			.ToList();
 
-		var filteredFormatList = cameraView.SelectedCamera.SupportedFormats.Where(f =>
-		{
-			var d = ((CMVideoFormatDescription)f.FormatDescription).Dimensions;
-			return d.Width <= resolution.Width && d.Height <= resolution.Height;
-		}).ToList();
+		var availableFormats = formatsMatchingResolution.Count is not 0
+			? formatsMatchingResolution
+			: GetPhotoCompatibleFormats(cameraView.SelectedCamera.SupportedFormats);
 
-		filteredFormatList = [.. (filteredFormatList.Count is not 0 ? filteredFormatList : cameraView.SelectedCamera.SupportedFormats)
-			.OrderByDescending(f =>
-			{
-				var d = ((CMVideoFormatDescription)f.FormatDescription).Dimensions;
-				return d.Width * d.Height;
-			})];
+		var selectedFormat = availableFormats
+			.OrderByDescending(f => f.ResolutionArea)
+			.FirstOrDefault();
 
-		if (filteredFormatList.Count is not 0)
+		if (selectedFormat is not null)
 		{
 			// breaks the camera preview
-			//captureDevice.ActiveFormat = filteredFormatList.First();
+			//captureDevice.ActiveFormat = selectedFormat;
 		}
 
 		captureDevice.UnlockForConfiguration();
+		return ValueTask.CompletedTask;
 	}
 
-	protected virtual async partial Task PlatformConnectCamera(CancellationToken token)
+	static AVCaptureVideoOrientation GetVideoOrientationFromAccelerometer(double x, double y)
 	{
-		if (cameraProvider.AvailableCameras is null)
+		// Absolute values help determine which axis is dominant
+		if (Math.Abs(y) >= Math.Abs(x))
 		{
-			await cameraProvider.RefreshAvailableCameras(token);
+			return y > 0 ? AVCaptureVideoOrientation.PortraitUpsideDown : AVCaptureVideoOrientation.Portrait;
+		}
+		else
+		{
+			// x > 0 is LandscapeRight for device, which is LandscapeLeft for Video
+			return x > 0 ? AVCaptureVideoOrientation.LandscapeLeft : AVCaptureVideoOrientation.LandscapeRight;
+		}
+	}
 
-			if (cameraProvider.AvailableCameras is null)
-			{
-				throw new CameraException("Unable to refresh cameras");
-			}
+	static AVCaptureVideoOrientation GetVideoOrientation()
+	{
+		IEnumerable<UIScene> scenes = UIApplication.SharedApplication.ConnectedScenes;
+
+		UIInterfaceOrientation interfaceOrientation;
+		if (!(OperatingSystem.IsMacCatalystVersionAtLeast(26) || OperatingSystem.IsIOSVersionAtLeast(26)))
+		{
+			interfaceOrientation = scenes.FirstOrDefault() is UIWindowScene windowScene
+				? windowScene.InterfaceOrientation
+				: UIApplication.SharedApplication.StatusBarOrientation;
+		}
+		else
+		{
+			interfaceOrientation = scenes.FirstOrDefault() is UIWindowScene windowScene
+				? windowScene.EffectiveGeometry.InterfaceOrientation
+				: UIApplication.SharedApplication.StatusBarOrientation;
 		}
 
+		return interfaceOrientation switch
+		{
+			UIInterfaceOrientation.Portrait => AVCaptureVideoOrientation.Portrait,
+			UIInterfaceOrientation.PortraitUpsideDown => AVCaptureVideoOrientation.PortraitUpsideDown,
+			UIInterfaceOrientation.LandscapeRight => AVCaptureVideoOrientation.LandscapeRight,
+			UIInterfaceOrientation.LandscapeLeft => AVCaptureVideoOrientation.LandscapeLeft,
+			_ => AVCaptureVideoOrientation.Portrait
+		};
+	}
+
+	static bool MatchesResolution(AVCaptureDeviceFormat format, Size resolution)
+	{
+		var dimensions = ((CMVideoFormatDescription)format.FormatDescription).Dimensions;
+		return dimensions.Width <= resolution.Width
+			   && dimensions.Height <= resolution.Height;
+	}
+
+	private async partial Task PlatformConnectCamera(CancellationToken token)
+	{
 		await PlatformStartCameraPreview(token);
 	}
 
-	protected virtual async partial Task PlatformStartCameraPreview(CancellationToken token)
+	private async partial Task PlatformStartCameraPreview(CancellationToken token)
 	{
 		if (captureSession is null)
 		{
@@ -198,15 +293,33 @@ partial class CameraManager
 			input.Dispose();
 		}
 
-		if (cameraView.SelectedCamera is null)
-		{
-			await cameraProvider.RefreshAvailableCameras(token);
-			cameraView.SelectedCamera = cameraProvider.AvailableCameras?.FirstOrDefault() ?? throw new CameraException("No camera available on device");
-		}
+		cameraView.SelectedCamera ??= cameraProvider.AvailableCameras?.FirstOrDefault() ?? throw new CameraException("No camera available on device");
 
 		captureDevice = cameraView.SelectedCamera.CaptureDevice ?? throw new CameraException($"No Camera found");
-		captureInput = new AVCaptureDeviceInput(captureDevice, out _);
-		captureSession.AddInput(captureInput);
+		captureInput = new AVCaptureDeviceInput(captureDevice, out NSError? error);
+
+		if (error is null && captureSession.CanAddInput(captureInput))
+		{
+			captureSession.AddInput(captureInput);
+		}
+		else
+		{
+			var errorMessage = error is not null
+				? $"Error creating capture device input: {error.LocalizedDescription}"
+				: "Unable to add capture device input to capture session.";
+
+			captureInput.Dispose();
+			captureInput = null;
+			captureSession.CommitConfiguration();
+			throw new CameraException(errorMessage);
+		}
+
+		// On iOS 17+, create a new instance of AVCaptureDeviceRotationCoordinator when switching to a new camera
+		if (UIDevice.CurrentDevice.CheckSystemVersion(17, 0))
+		{
+			rotationCoordinator?.Dispose();
+			rotationCoordinator = new(captureDevice, previewView?.Layer);
+		}
 
 		previewView!.SetCaptureDevice(captureDevice);
 
@@ -220,11 +333,11 @@ partial class CameraManager
 
 		captureSession.CommitConfiguration();
 		captureSession.StartRunning();
-		IsInitialized = true;
-		OnLoaded.Invoke();
+		isInitialized = true;
+		onLoaded.Invoke();
 	}
 
-	protected virtual partial void PlatformStopCameraPreview()
+	private partial void PlatformStopCameraPreview()
 	{
 		if (captureSession is null)
 		{
@@ -236,14 +349,14 @@ partial class CameraManager
 			captureSession.StopRunning();
 		}
 
-		IsInitialized = false;
+		isInitialized = false;
 	}
 
-	protected virtual partial void PlatformDisconnect()
+	private partial void PlatformDisconnect()
 	{
 	}
 
-	protected virtual async partial Task PlatformStartVideoRecording(Stream stream, CancellationToken token)
+	private async partial Task PlatformStartVideoRecording(Stream stream, CancellationToken token)
 	{
 		var isPermissionGranted = await AVCaptureDevice.RequestAccessForMediaTypeAsync(AVAuthorizationMediaType.Video).WaitAsync(token);
 		if (!isPermissionGranted)
@@ -258,22 +371,7 @@ partial class CameraManager
 
 		CleanupVideoRecordingResources();
 
-		var videoDevice = AVCaptureDevice.GetDefaultDevice(AVMediaTypes.Video) ?? throw new CameraException("Unable to get video device");
-
-		videoInput = new AVCaptureDeviceInput(videoDevice, out NSError? error);
-		if (error is not null)
-		{
-			throw new CameraException($"Error creating video input: {error.LocalizedDescription}");
-		}
-
-		if (!captureSession.CanAddInput(videoInput))
-		{
-			videoInput?.Dispose();
-			throw new CameraException("Unable to add video input to capture session.");
-		}
-
 		captureSession.BeginConfiguration();
-		captureSession.AddInput(videoInput);
 
 		try
 		{
@@ -301,7 +399,6 @@ partial class CameraManager
 
 		if (!captureSession.CanAddOutput(videoOutput))
 		{
-			captureSession.RemoveInput(videoInput);
 			if (audioInput is not null)
 			{
 				captureSession.RemoveInput(audioInput);
@@ -309,7 +406,6 @@ partial class CameraManager
 				audioInput = null;
 			}
 
-			videoInput?.Dispose();
 			videoOutput?.Dispose();
 			captureSession.CommitConfiguration();
 			throw new CameraException("Unable to add video output to capture session.");
@@ -318,22 +414,27 @@ partial class CameraManager
 		captureSession.AddOutput(videoOutput);
 		captureSession.CommitConfiguration();
 
+		if (!TryConfigureAVCaptureConnection(videoOutput, out var error))
+		{
+			Trace.TraceWarning(error);
+		}
+
 		videoRecordingStream = stream;
 		videoRecordingFinalizeTcs = new TaskCompletionSource();
 		videoRecordingFileName = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.mov");
 
 		var outputUrl = NSUrl.FromFilename(videoRecordingFileName);
-		videoOutput.StartRecordingToOutputFile(outputUrl, new AVCaptureMovieFileOutputRecordingDelegate(videoRecordingFinalizeTcs));
+		videoRecordingDelegate = new AVCaptureMovieFileOutputRecordingDelegate(videoRecordingFinalizeTcs);
+		videoOutput.StartRecordingToOutputFile(outputUrl, videoRecordingDelegate);
 	}
 
-	protected virtual async partial Task<Stream> PlatformStopVideoRecording(CancellationToken token)
+	private async partial Task<Stream> PlatformStopVideoRecording(CancellationToken token)
 	{
-		if (captureSession is null 
-		    || videoRecordingFileName is null 
-		    || videoInput is null 
-		    || videoOutput is null 
-		    || videoRecordingStream is null 
-		    || videoRecordingFinalizeTcs is null)
+		if (captureSession is null
+			|| videoRecordingFileName is null
+			|| videoOutput is null
+			|| videoRecordingStream is null
+			|| videoRecordingFinalizeTcs is null)
 		{
 			return Stream.Null;
 		}
@@ -363,26 +464,25 @@ partial class CameraManager
 		{
 			captureSession.BeginConfiguration();
 
-			foreach (var input in captureSession.Inputs)
+			if (audioInput is not null)
 			{
-				captureSession.RemoveInput(input);
-				input.Dispose();
+				captureSession.RemoveInput(audioInput);
+				audioInput.Dispose();
 			}
 
-			foreach (var output in captureSession.Outputs)
+			if (videoOutput is not null)
 			{
-				captureSession.RemoveOutput(output);
-				output.Dispose();
+				captureSession.RemoveOutput(videoOutput);
+				videoOutput.Dispose();
 			}
 
-			// Restore to photo preset for preview after video recording
-			captureSession.SessionPreset = AVCaptureSession.PresetPhoto;
 			captureSession.CommitConfiguration();
 		}
 
 		videoOutput = null;
-		videoInput = null;
 		audioInput = null;
+		videoRecordingDelegate?.Dispose();
+		videoRecordingDelegate = null;
 
 		// Clean up temporary file
 		if (videoRecordingFileName is not null)
@@ -398,20 +498,16 @@ partial class CameraManager
 		videoRecordingFinalizeTcs = null;
 	}
 
-	protected virtual async partial ValueTask PlatformTakePicture(CancellationToken token)
+	private async partial ValueTask PlatformTakePicture(CancellationToken token)
 	{
 		ArgumentNullException.ThrowIfNull(photoOutput);
 
 		var capturePhotoSettings = AVCapturePhotoSettings.FromFormat(codecSettings);
 		capturePhotoSettings.FlashMode = photoOutput.SupportedFlashModes.Contains(flashMode) ? flashMode : photoOutput.SupportedFlashModes.First();
 
-		if (AVMediaTypes.Video.GetConstant() is NSString avMediaTypeVideo)
+		if (!TryConfigureAVCaptureConnection(photoOutput, out var errorMessage))
 		{
-			var photoOutputConnection = photoOutput.ConnectionFromMediaType(avMediaTypeVideo);
-			if (photoOutputConnection is not null)
-			{
-				photoOutputConnection.VideoOrientation = videoOrientation;
-			}
+			Trace.TraceWarning(errorMessage);
 		}
 
 		var wrapper = new AVCapturePhotoCaptureDelegateWrapper();
@@ -453,56 +549,65 @@ partial class CameraManager
 		}
 	}
 
-	protected virtual void Dispose(bool disposing)
+	bool TryConfigureAVCaptureConnection(in AVCaptureOutput captureOutput, [NotNullWhen(false)] out string? errorMessage)
 	{
-		if (disposing)
+		errorMessage = null;
+
+		if (AVMediaTypes.Video.GetConstant() is not NSString avMediaTypeVideo)
 		{
-			CleanupVideoRecordingResources();
-
-			captureSession?.StopRunning();
-			captureSession?.Dispose();
-			captureSession = null;
-
-			captureInput?.Dispose();
-			captureInput = null;
-
-			captureDevice = null;
-
-			orientationDidChangeObserver?.Dispose();
-			orientationDidChangeObserver = null;
-
-			photoOutput?.Dispose();
-			photoOutput = null;
-
-			previewView?.Dispose();
-			previewView = null;
-
-			videoRecordingStream?.Dispose();
-			videoRecordingStream = null;
+			errorMessage = "Unable to determine video format.";
+			return false;
 		}
-	}
 
-	static AVCaptureVideoOrientation GetVideoOrientation()
-	{
-		IEnumerable<UIScene> scenes = UIApplication.SharedApplication.ConnectedScenes;
-		var interfaceOrientation = scenes.FirstOrDefault() is UIWindowScene windowScene
-			? windowScene.InterfaceOrientation
-			: UIApplication.SharedApplication.StatusBarOrientation;
-
-		return interfaceOrientation switch
+		if (captureOutput.ConnectionFromMediaType(avMediaTypeVideo) is not AVCaptureConnection captureConnection)
 		{
-			UIInterfaceOrientation.Portrait => AVCaptureVideoOrientation.Portrait,
-			UIInterfaceOrientation.PortraitUpsideDown => AVCaptureVideoOrientation.PortraitUpsideDown,
-			UIInterfaceOrientation.LandscapeRight => AVCaptureVideoOrientation.LandscapeRight,
-			UIInterfaceOrientation.LandscapeLeft => AVCaptureVideoOrientation.LandscapeLeft,
-			_ => AVCaptureVideoOrientation.Portrait
-		};
+			errorMessage = "Unable to determine video connection from media type.";
+			return false;
+		}
+
+		// use AVCaptureDeviceRotationCoordinator to set captured photo and video orientation on iOS 17+
+		if (UIDevice.CurrentDevice.CheckSystemVersion(17, 0))
+		{
+			if (rotationCoordinator is not null)
+			{
+				captureConnection.VideoRotationAngle = rotationCoordinator.VideoRotationAngleForHorizonLevelCapture;
+			}
+		}
+		// use CMMotionManager to set captured photo and video orientation on iOS 16 and lower
+		else
+		{
+			var data = motionManager?.AccelerometerData;
+			if (data is not null)
+			{
+				var orientation = GetVideoOrientationFromAccelerometer(data.Acceleration.X, data.Acceleration.Y);
+				captureConnection.VideoOrientation = orientation;
+			}
+		}
+
+		if (captureConnection.SupportsVideoMirroring)
+		{
+			captureConnection.AutomaticallyAdjustsVideoMirroring = false;
+			captureConnection.VideoMirrored = cameraView.SelectedCamera?.Position is CameraPosition.Front;
+		}
+
+		return true;
 	}
 
 	void UpdateVideoOrientation()
 	{
 		videoOrientation = GetVideoOrientation();
 		previewView?.UpdatePreviewVideoOrientation(videoOrientation);
+	}
+
+	IEnumerable<AVCaptureDeviceFormat> GetPhotoCompatibleFormats(IEnumerable<AVCaptureDeviceFormat> formats)
+	{
+		if (photoOutput is not null)
+		{
+			var photoPixelFormats = photoOutput.GetSupportedPhotoPixelFormatTypesForFileType(nameof(AVFileTypes.Jpeg));
+			return formats.Where(format => photoPixelFormats.Contains((NSNumber)format.FormatDescription.MediaSubType));
+		}
+
+		return formats;
 	}
 
 	sealed class AVCapturePhotoCaptureDelegateWrapper : AVCapturePhotoCaptureDelegate

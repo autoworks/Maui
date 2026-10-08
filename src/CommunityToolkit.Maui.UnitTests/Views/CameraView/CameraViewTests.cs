@@ -21,7 +21,7 @@ public class CameraViewTests : BaseViewTest
 	{
 		Assert.Equal(CameraViewDefaults.IsAvailable, cameraView.IsAvailable);
 		Assert.Equal(CameraViewDefaults.IsTorchOn, cameraView.IsTorchOn);
-		Assert.Equal(CameraViewDefaults.IsCameraBusy, cameraView.IsCameraBusy);
+		Assert.Equal(CameraViewDefaults.IsCameraBusy, cameraView.IsBusy);
 		Assert.Equal(CameraViewDefaults.ZoomFactor, cameraView.ZoomFactor);
 		Assert.Equal(CameraViewDefaults.ImageCaptureResolution, cameraView.ImageCaptureResolution);
 		Assert.Equal(CameraViewDefaults.CameraFlashMode, cameraView.CameraFlashMode);
@@ -88,7 +88,7 @@ public class CameraViewTests : BaseViewTest
 
 		((ICameraView)cameraView).OnMediaCapturedFailed(failureMessage);
 
-		var mediaCaptureFailedEventArgs = await mediaCaptureFailedTcs.Task;
+		var mediaCaptureFailedEventArgs = await mediaCaptureFailedTcs.Task.WaitAsync(TestContext.Current.CancellationToken);
 
 		Assert.True(wasEventRaised);
 		Assert.Equal(failureMessage, mediaCaptureFailedEventArgs.FailureReason);
